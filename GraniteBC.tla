@@ -140,7 +140,28 @@ begin
     Value := IF self \in Byzantine THEN {0, 1} ELSE {initial};
 
     loop:
-    while round <= TotalRounds do        
+    while round <= TotalRounds do
+        coin:
+            if COIN \in Value then
+                if self \in Byzantine then                
+                    Value := (Value \ {COIN}) \union {0, 1};                
+                else
+                    if round < LuckyRound then
+                        (* Nondeterministic choice. *)
+                        with v \in {0, 1} do
+                            Value := {v};
+                        end with;
+                    else
+                        (*
+                        * In our lucky round, we inspect all values and choose
+                        * in a way that ensures unanimity among correct processes.
+                        *)
+                        Value := LET V == { (CHOOSE v \in Value[p]: v # COIN): p \in Correct }
+                                 IN IF V # {} THEN V ELSE {1};
+                    end if;
+                end if;
+            end if;
+
         broadcast:
         if self \in Byzantine then 
             msgs := msgs \union { Msg(round, step, v, self): v \in Value };
@@ -173,8 +194,8 @@ begin
 end process;
 end algorithm; *)
 
-\* BEGIN TRANSLATION (chksum(pcal) = "531ccd4f" /\ chksum(tla) = "62288bc1")
-\* Label step of process group at line 154 col 9 changed to step_
+\* BEGIN TRANSLATION (chksum(pcal) = "30f2f09e" /\ chksum(tla) = "26b96880")
+\* Label step of process group at line 175 col 9 changed to step_
 VARIABLES msgs, pc, round, step, initial, Value, decided
 
 vars == << msgs, pc, round, step, initial, Value, decided >>
@@ -198,9 +219,23 @@ initial_value(self) == /\ pc[self] = "initial_value"
 
 loop(self) == /\ pc[self] = "loop"
               /\ IF round[self] <= TotalRounds
-                    THEN /\ pc' = [pc EXCEPT ![self] = "broadcast"]
+                    THEN /\ pc' = [pc EXCEPT ![self] = "coin"]
                     ELSE /\ pc' = [pc EXCEPT ![self] = "Done"]
               /\ UNCHANGED << msgs, round, step, initial, Value, decided >>
+
+coin(self) == /\ pc[self] = "coin"
+              /\ IF COIN \in Value[self]
+                    THEN /\ IF self \in Byzantine
+                               THEN /\ Value' = [Value EXCEPT ![self] = (Value[self] \ {COIN}) \union {0, 1}]
+                               ELSE /\ IF round[self] < LuckyRound
+                                          THEN /\ \E v \in {0, 1}:
+                                                    Value' = [Value EXCEPT ![self] = {v}]
+                                          ELSE /\ Value' = [Value EXCEPT ![self] = LET V == { (CHOOSE v \in Value[self][p]: v # COIN): p \in Correct }
+                                                                                   IN IF V # {} THEN V ELSE {1}]
+                    ELSE /\ TRUE
+                         /\ Value' = Value
+              /\ pc' = [pc EXCEPT ![self] = "broadcast"]
+              /\ UNCHANGED << msgs, round, step, initial, decided >>
 
 broadcast(self) == /\ pc[self] = "broadcast"
                    /\ IF self \in Byzantine
@@ -230,8 +265,8 @@ next_step(self) == /\ pc[self] = "next_step"
                    /\ pc' = [pc EXCEPT ![self] = "loop"]
                    /\ UNCHANGED << msgs, initial, Value, decided >>
 
-group(self) == initial_value(self) \/ loop(self) \/ broadcast(self)
-                  \/ step_(self) \/ next_step(self)
+group(self) == initial_value(self) \/ loop(self) \/ coin(self)
+                  \/ broadcast(self) \/ step_(self) \/ next_step(self)
 
 (* Allow infinite stuttering to prevent deadlock on termination. *)
 Terminating == /\ \A self \in ProcSet: pc[self] = "Done"
