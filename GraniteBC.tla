@@ -153,23 +153,17 @@ begin
                         end with;
                     else
                         (*
-                        * In our lucky round, we inspect all values and choose
-                        * in a way that ensures unanimity among correct processes.
-                        *)
+                         * In our lucky round, we inspect all values and choose
+                         * in a way that ensures unanimity among correct processes.
+                         *)
                         Value := LET V == { (CHOOSE v \in Value[p]: v # COIN): p \in Correct }
                                  IN IF V # {} THEN V ELSE {1};
                     end if;
                 end if;
             end if;
 
-        broadcast:
-        if self \in Byzantine then 
-            msgs := msgs \union { Msg(round, step, v, self): v \in Value };
-        else
-            with v \in Value do 
-                msgs := msgs \union { Msg(round, step, v, self) };
-            end with;
-        end if;
+        broadcast:        
+        msgs := msgs \union { Msg(round, step, v, self): v \in Value };
 
         step:
         await AllMessages(msgs, round, step);
@@ -194,8 +188,8 @@ begin
 end process;
 end algorithm; *)
 
-\* BEGIN TRANSLATION (chksum(pcal) = "30f2f09e" /\ chksum(tla) = "26b96880")
-\* Label step of process group at line 175 col 9 changed to step_
+\* BEGIN TRANSLATION (chksum(pcal) = "483c7d95" /\ chksum(tla) = "e8781675")
+\* Label step of process group at line 169 col 9 changed to step_
 VARIABLES msgs, pc, round, step, initial, Value, decided
 
 vars == << msgs, pc, round, step, initial, Value, decided >>
@@ -238,10 +232,7 @@ coin(self) == /\ pc[self] = "coin"
               /\ UNCHANGED << msgs, round, step, initial, decided >>
 
 broadcast(self) == /\ pc[self] = "broadcast"
-                   /\ IF self \in Byzantine
-                         THEN /\ msgs' = (msgs \union { Msg(round[self], step[self], v, self): v \in Value[self] })
-                         ELSE /\ \E v \in Value[self]:
-                                   msgs' = (msgs \union { Msg(round[self], step[self], v, self) })
+                   /\ msgs' = (msgs \union { Msg(round[self], step[self], v, self): v \in Value[self] })
                    /\ pc' = [pc EXCEPT ![self] = "step_"]
                    /\ UNCHANGED << round, step, initial, Value, decided >>
 
