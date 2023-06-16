@@ -7,7 +7,7 @@ CONSTANTS
 
 N == 1..4        \* The set of all processes.
 TotalRounds == 1            \* The total number of rounds of message exchanges.
-\*LuckyRound == TotalRounds-1 \* The round in which all processes flip the same coin.
+LuckyRound == TotalRounds-1 \* The round in which all processes flip the same coin.
 
 (* Algorithm steps *)
 Step_1 == 1
@@ -29,7 +29,7 @@ Msg(round, step, value, sender) ==
     [round |-> round, step |-> step, value |-> value, sender |-> sender]
 
 (* Adds a message 'msg' to the set of messages 'msgs' ever sent to the network. *)
-Broadcast(msgs, msg) == msgs \union {msg}
+Bcast(msgs, msg) == msgs \union {msg}
 
 (* All subsets of the subset of `msgs` for a particular round and step with cardinality 2f+1. *) 
 DeliverMsgs(msgs, round, step) ==
@@ -81,84 +81,103 @@ ValueFunction(step, M) ==
 variables
     (* The set of all messages broadcast to the network. *)
     msgs = {},
+
+macro ComputeStep3() begin
+    with M \in DeliverMsgs(msgs, round, 3) do
+        (* 
+        * If we receive 2f+1 messages with the same value not NIL, then we
+        * decide that value.
+        *)
+        if SomeHasCount(M, 2*f+1) then                
+            decided := TRUE;
+        end if;
+
+        (*
+        * If we receive f+1 messages with the same value not NIL, then we
+        * set our proposal to that value.
+        *)
+        if SomeHasCount(M, f+1) then
+            Value := {ChooseValue(M, f+1)};
+
+        (*
+        * Otherwise, if we only receive one message with some value v not
+        * NIL, then we choose our proposal value randomly as a coin flip
+        * between v and min.
+        * To model this, we assume that exists a "lucky" round where all
+        * processes flip the right value. In all other rounds, we choose
+        * nondeterministically between v and min.
+        *)
+        else         
+            if round < LuckyRound then
+                (* Nondeterministic choice. *)
+                with v \in {0, 1} do
+                    Value := {v};
+                end with;
+            else
+                (*
+                * In our lucky round, we inspect all messages and choose
+                * in a way that ensures unanimity among correct processes.
+                *)
+                Value := LET All == {m \in msgs: m.sender \in Correct /\ m.round = round /\ m.step = Step_3}
+                            IN IF SomeHasCount(All, 1)
+                            THEN {ChooseValue(All, 1)}
+                            ELSE {1};
+            end if;
+        end if;
+    end with;
+end macro;
+
 (* Main body of the algorithm. *)
 fair process group \in N
 variables 
     round = 1,
+    step = 1,
     initial \in {0, 1},
-    value = NIL,
-    decided = FALSE
+    Value = {},
+    decided = FALSE,
 begin
-    initial_broadcast:
-    if self \in Byzantine then 
-        msgs := { Msg(round, Step_1, v, self): v \in {0, 1} } \union msgs;
-    else
-        msgs := Broadcast(msgs, Msg(round, Step_1, initial, self)) \union msgs;
-    end if;
+    initial_value:
+    Value := IF self \in Byzantine THEN {0, 1} ELSE {initial};
 
     loop:
-    while round <= TotalRounds do
-        step_1:
-        await AllMessages(msgs, round, 1); 
-        if self \in Byzantine then
-            msgs := { Msg(round, Step_2, ValueFunctionStep1(M), self): M \in DeliverMsgs(msgs, round, Step_1) } \union msgs;
+    while round <= TotalRounds do        
+        broadcast:
+        if self \in Byzantine then 
+            msgs := msgs \union { Msg(round, step, v, self): v \in Value };
         else
-            with M \in DeliverMsgs(msgs, round, Step_1) do             
-                value := ValueFunctionStep1(M);            
+            with v \in Value do 
+                msgs := msgs \union { Msg(round, step, v, self) };
             end with;
-            msgs := { Msg(round, Step_2, value, self) } \union msgs;
         end if;
 
-        step_2:
-        await AllMessages(msgs, round, Step_2); 
-        if self \in Byzantine then
-            msgs := { Msg(round, Step_3, ValueFunctionStep2(M), self): M \in DeliverMsgs(msgs, round, Step_2) } \union msgs;
+        step:
+        await AllMessages(msgs, round, step);
+        if self \in Byzantine then 
+            Value := { ValueFunction(step, M): M \in DeliverMsgs(msgs, round, step) };
         else
-            with M \in DeliverMsgs(msgs, round, 2) do             
-                value := ValueFunctionStep2(M);            
+            with M \in DeliverMsgs(msgs, round, step) do 
+                Value := { ValueFunction(step, M) };
+                decided := step = 3 /\ SomeHasCount(M, 2*f+1);
             end with;
-            msgs := { Msg(round, Step_3, value, self) } \union msgs;
         end if;
 
-        step_3:
-        await AllMessages(msgs, round, Step_3); 
-        if self \in Byzantine then
-            msgs := { Msg(round+1, Step_1, ValueFunctionStep3(M), self): M \in DeliverMsgs(msgs, round, Step_3) } \union msgs;
+        next_step:
+        if step < 3 then 
+            step := step +1;
         else
-            with M \in DeliverMsgs(msgs, round, Step_3) do             
-                value := ValueFunctionStep3(M);
-                decided := SomeHasCount(M, 2*f+1);
-
-                \*if round < LuckyRound then
-                \*    (* Nondeterministic choice. *)
-                \*    with v \in {0, 1} do
-                \*        value := v;
-                \*    end with;
-                \*else
-                    (*
-                     * In our lucky round, we inspect all messages and choose
-                     * in a way that ensure unanimity (or quasi-unanimity).
-                     *)
-                \*    value := LET All == {m \in msgs: m.sender \in Correct /\ m.round = round /\ m.step = Step_3}
-                \*             IN IF SomeHasCount(All, 1)
-                \*                THEN ChooseValue(All, 1)
-                \*                ELSE 1;
-                \*end if;                
-
-            end with;        
-            msgs := { Msg(round+1, Step_1, value, self) } \union msgs;
+            step := 1;
+            round := round + 1;
         end if;
-
-        round := round + 1;
     end while;
 
 end process;
 end algorithm; *)
 
-\* BEGIN TRANSLATION (chksum(pcal) = "f0cba5c7" /\ chksum(tla) = "1d868748")
-VARIABLES msgs, pc, round, initial, value, decided
+\* BEGIN TRANSLATION (chksum(pcal) = "531ccd4f" /\ chksum(tla) = "62288bc1")
+\* Label step of process group at line 154 col 9 changed to step_
+VARIABLES msgs, pc, round, step, initial, Value, decided
 
-vars == << msgs, pc, round, initial, value, decided >>
+vars == << msgs, pc, round, step, initial, Value, decided >>
 
 ProcSet == (N)
 
@@ -166,61 +185,53 @@ Init == (* Global variables *)
         /\ msgs = {}
         (* Process group *)
         /\ round = [self \in N |-> 1]
+        /\ step = [self \in N |-> 1]
         /\ initial \in [N -> {0, 1}]
-        /\ value = [self \in N |-> NIL]
+        /\ Value = [self \in N |-> {}]
         /\ decided = [self \in N |-> FALSE]
-        /\ pc = [self \in ProcSet |-> "initial_broadcast"]
+        /\ pc = [self \in ProcSet |-> "initial_value"]
 
-initial_broadcast(self) == /\ pc[self] = "initial_broadcast"
-                           /\ IF self \in Byzantine
-                                 THEN /\ msgs' = ({ Msg(round[self], Step_1, v, self): v \in {0, 1} } \union msgs)
-                                 ELSE /\ msgs' = (Broadcast(msgs, Msg(round[self], Step_1, initial[self], self)) \union msgs)
-                           /\ pc' = [pc EXCEPT ![self] = "loop"]
-                           /\ UNCHANGED << round, initial, value, decided >>
+initial_value(self) == /\ pc[self] = "initial_value"
+                       /\ Value' = [Value EXCEPT ![self] = IF self \in Byzantine THEN {0, 1} ELSE {initial[self]}]
+                       /\ pc' = [pc EXCEPT ![self] = "loop"]
+                       /\ UNCHANGED << msgs, round, step, initial, decided >>
 
 loop(self) == /\ pc[self] = "loop"
               /\ IF round[self] <= TotalRounds
-                    THEN /\ pc' = [pc EXCEPT ![self] = "step_1"]
+                    THEN /\ pc' = [pc EXCEPT ![self] = "broadcast"]
                     ELSE /\ pc' = [pc EXCEPT ![self] = "Done"]
-              /\ UNCHANGED << msgs, round, initial, value, decided >>
+              /\ UNCHANGED << msgs, round, step, initial, Value, decided >>
 
-step_1(self) == /\ pc[self] = "step_1"
-                /\ AllMessages(msgs, round[self], 1)
-                /\ IF self \in Byzantine
-                      THEN /\ msgs' = ({ Msg(round[self], Step_2, ValueFunctionStep1(M), self): M \in DeliverMsgs(msgs, round[self], Step_1) } \union msgs)
-                           /\ value' = value
-                      ELSE /\ \E M \in DeliverMsgs(msgs, round[self], Step_1):
-                                value' = [value EXCEPT ![self] = ValueFunctionStep1(M)]
-                           /\ msgs' = ({ Msg(round[self], Step_2, value'[self], self) } \union msgs)
-                /\ pc' = [pc EXCEPT ![self] = "step_2"]
-                /\ UNCHANGED << round, initial, decided >>
+broadcast(self) == /\ pc[self] = "broadcast"
+                   /\ IF self \in Byzantine
+                         THEN /\ msgs' = (msgs \union { Msg(round[self], step[self], v, self): v \in Value[self] })
+                         ELSE /\ \E v \in Value[self]:
+                                   msgs' = (msgs \union { Msg(round[self], step[self], v, self) })
+                   /\ pc' = [pc EXCEPT ![self] = "step_"]
+                   /\ UNCHANGED << round, step, initial, Value, decided >>
 
-step_2(self) == /\ pc[self] = "step_2"
-                /\ AllMessages(msgs, round[self], Step_2)
-                /\ IF self \in Byzantine
-                      THEN /\ msgs' = ({ Msg(round[self], Step_3, ValueFunctionStep2(M), self): M \in DeliverMsgs(msgs, round[self], Step_2) } \union msgs)
-                           /\ value' = value
-                      ELSE /\ \E M \in DeliverMsgs(msgs, round[self], 2):
-                                value' = [value EXCEPT ![self] = ValueFunctionStep2(M)]
-                           /\ msgs' = ({ Msg(round[self], Step_3, value'[self], self) } \union msgs)
-                /\ pc' = [pc EXCEPT ![self] = "step_3"]
-                /\ UNCHANGED << round, initial, decided >>
+step_(self) == /\ pc[self] = "step_"
+               /\ AllMessages(msgs, round[self], step[self])
+               /\ IF self \in Byzantine
+                     THEN /\ Value' = [Value EXCEPT ![self] = { ValueFunction(step[self], M): M \in DeliverMsgs(msgs, round[self], step[self]) }]
+                          /\ UNCHANGED decided
+                     ELSE /\ \E M \in DeliverMsgs(msgs, round[self], step[self]):
+                               /\ Value' = [Value EXCEPT ![self] = { ValueFunction(step[self], M) }]
+                               /\ decided' = [decided EXCEPT ![self] = step[self] = 3 /\ SomeHasCount(M, 2*f+1)]
+               /\ pc' = [pc EXCEPT ![self] = "next_step"]
+               /\ UNCHANGED << msgs, round, step, initial >>
 
-step_3(self) == /\ pc[self] = "step_3"
-                /\ AllMessages(msgs, round[self], 3)
-                /\ IF self \in Byzantine
-                      THEN /\ msgs' = ({ Msg(round[self]+1, Step_1, ValueFunctionStep3(M), self): M \in DeliverMsgs(msgs, round[self], Step_3) } \union msgs)
-                           /\ UNCHANGED << value, decided >>
-                      ELSE /\ \E M \in DeliverMsgs(msgs, round[self], Step_3):
-                                /\ value' = [value EXCEPT ![self] = ValueFunctionStep3(M)]
-                                /\ decided' = [decided EXCEPT ![self] = SomeHasCount(M, 2*f+1)]
-                           /\ msgs' = ({ Msg(round[self]+1, Step_1, value'[self], self) } \union msgs)
-                /\ round' = [round EXCEPT ![self] = round[self] + 1]
-                /\ pc' = [pc EXCEPT ![self] = "loop"]
-                /\ UNCHANGED initial
+next_step(self) == /\ pc[self] = "next_step"
+                   /\ IF step[self] < 3
+                         THEN /\ step' = [step EXCEPT ![self] = step[self] +1]
+                              /\ round' = round
+                         ELSE /\ step' = [step EXCEPT ![self] = 1]
+                              /\ round' = [round EXCEPT ![self] = round[self] + 1]
+                   /\ pc' = [pc EXCEPT ![self] = "loop"]
+                   /\ UNCHANGED << msgs, initial, Value, decided >>
 
-group(self) == initial_broadcast(self) \/ loop(self) \/ step_1(self)
-                  \/ step_2(self) \/ step_3(self)
+group(self) == initial_value(self) \/ loop(self) \/ broadcast(self)
+                  \/ step_(self) \/ next_step(self)
 
 (* Allow infinite stuttering to prevent deadlock on termination. *)
 Terminating == /\ \A self \in ProcSet: pc[self] = "Done"
@@ -240,21 +251,18 @@ Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 \* Agreement == \A <<p1, p2>> \in N \X N: decision[p1] # NIL => (decision[p1] = decision[p2] \/ decision[p2] = NIL)
 \* StrongTermination == \A p \in N: round[p] > TotalRounds => decision[p] # NIL
 Agreement ==
-    (\A p \in N: pc[p] = "Done") => (
-        \A <<p1, p2>> \in Correct \X Correct:
-            (value[p1] \in {0,1} => (value[p1] = value[p2] \/ value[p2] = COIN))
-    )
+    \A <<p1, p2>> \in Correct \X Correct: decided[p1] /\ decided[p2] => Value[p1] = Value[p2]
 
 UnanimityImpliesTermination ==
     (\A p \in N: pc[p] = "Done") => (
         (\A <<p1, p2>> \in Correct \X Correct: initial[p1] = initial[p2]) =>
-            (\A p \in Correct: decided[p] /\ value[p] = initial[p])
+            (\A p \in Correct: decided[p] /\ Value[p] = {initial[p]})
     )
 
 DecisionImpliesDeterministicChoice ==
     (\A p \in N: pc[p] = "Done") => (
         \A <<p1, p2>> \in Correct \X Correct: 
-            (decided[p1] => (value[p1] \in {0,1} /\ value[p1] = value[p2]))
+            (decided[p1] => (Value[p1] \in {{0},{1}} /\ Value[p1] = Value[p2]))
     )
 
 =============================================================================
